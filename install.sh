@@ -1641,17 +1641,88 @@ uninstall_panel() {
 
     step "Uninstalling Pelican Panel"
 
+    # ── Read DB credentials from .env before deleting files ──
+    local env_file="${PELICAN_DIR}/.env"
+    local db_driver="" db_host="" db_port="" db_name="" db_user="" db_pass=""
+    if [[ -f "$env_file" ]]; then
+        db_driver=$(grep -E "^DB_CONNECTION=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_host=$(grep -E "^DB_HOST=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_port=$(grep -E "^DB_PORT=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_name=$(grep -E "^DB_DATABASE=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_user=$(grep -E "^DB_USERNAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_pass=$(grep -E "^DB_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+    fi
+
+    # ── Drop database & user if we found credentials ──
+    if [[ -n "$db_driver" && -n "$db_name" && "$db_name" != "sqlite" ]]; then
+        echo ""
+        echo -e "  ${YELLOW}Found database:${RESET} ${CYAN}${db_driver}${RESET} → ${BOLD}${db_name}${RESET} (user: ${db_user:-<none>})"
+        if confirm "  Drop database '${db_name}' and user '${db_user}'? (y/N):" "N"; then
+            case "$db_driver" in
+                mysql|mariadb)
+                    info "Dropping MySQL/MariaDB database and user..."
+                    if command -v mysql &>/dev/null; then
+                        mysql -u root <<-EOSQL 2>/dev/null && success "Database '${db_name}' dropped" || warn "Could not drop database (maybe already gone or root needs a password)"
+DROP DATABASE IF EXISTS \`${db_name}\`;
+EOSQL
+                        if [[ -n "$db_user" && "$db_user" != "root" ]]; then
+                            mysql -u root <<-EOSQL 2>/dev/null && success "User '${db_user}' dropped" || warn "Could not drop user"
+DROP USER IF EXISTS '${db_user}'@'${db_host:-127.0.0.1}';
+DROP USER IF EXISTS '${db_user}'@'localhost';
+FLUSH PRIVILEGES;
+EOSQL
+                        fi
+                    else
+                        warn "mysql client not found — run manually: DROP DATABASE ${db_name}; DROP USER '${db_user}'@'localhost';"
+                    fi
+                    ;;
+                pgsql|postgres|postgresql)
+                    info "Dropping PostgreSQL database and user..."
+                    if command -v psql &>/dev/null; then
+                        sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"${db_name}\";" 2>/dev/null \
+                            && success "Database '${db_name}' dropped" \
+                            || warn "Could not drop database (maybe already gone)"
+                        if [[ -n "$db_user" && "$db_user" != "postgres" ]]; then
+                            sudo -u postgres psql -c "DROP USER IF EXISTS \"${db_user}\";" 2>/dev/null \
+                                && success "User '${db_user}' dropped" \
+                                || warn "Could not drop user (may own other objects)"
+                        fi
+                    else
+                        warn "psql client not found — run manually: DROP DATABASE ${db_name}; DROP USER ${db_user};"
+                    fi
+                    ;;
+                sqlite)
+                    # SQLite DB is just a file inside PELICAN_DIR — gets deleted with the directory
+                    info "SQLite database will be removed with panel files."
+                    ;;
+                *)
+                    warn "Unknown DB driver '${db_driver}' — please clean up the database manually."
+                    ;;
+            esac
+        else
+            info "Skipping database cleanup."
+        fi
+    fi
+
+    # ── Stop services ──
     systemctl stop pelican-queue 2>/dev/null || true
     systemctl disable pelican-queue 2>/dev/null || true
     rm -f /etc/systemd/system/pelican-queue.service
 
+    # ── Remove web server configs ──
     rm -f /etc/nginx/sites-enabled/pelican.conf /etc/nginx/sites-available/pelican.conf 2>/dev/null || true
     rm -f /etc/apache2/sites-enabled/pelican.conf /etc/apache2/sites-available/pelican.conf 2>/dev/null || true
     rm -f /etc/httpd/conf.d/pelican.conf 2>/dev/null || true
+    # Caddy — remove pelican block from Caddyfile if present
+    if [[ -f /etc/caddy/Caddyfile ]]; then
+        sed -i '/# Pelican Panel/,/^}/d' /etc/caddy/Caddyfile 2>/dev/null || true
+    fi
 
+    # ── Remove panel directory ──
     rm -rf "$PELICAN_DIR"
     systemctl daemon-reload
 
+    # ── Restart web server ──
     systemctl restart nginx 2>/dev/null || systemctl restart apache2 2>/dev/null || \
         systemctl restart httpd 2>/dev/null || systemctl restart caddy 2>/dev/null || true
 
@@ -1670,14 +1741,39 @@ uninstall_wings() {
     rm -f /etc/systemd/system/wings.service
     rm -f "$WINGS_BIN"
 
+    # ── Remove web server reverse proxy configs ──
     rm -f /etc/nginx/sites-enabled/wings.conf /etc/nginx/sites-available/wings.conf 2>/dev/null || true
     rm -f /etc/apache2/sites-enabled/wings.conf /etc/apache2/sites-available/wings.conf 2>/dev/null || true
     rm -f /etc/httpd/conf.d/wings.conf 2>/dev/null || true
+    # Caddy — remove wings block from Caddyfile if present
+    if [[ -f /etc/caddy/Caddyfile ]]; then
+        sed -i '/# Wings Proxy/,/^}/d' /etc/caddy/Caddyfile 2>/dev/null || true
+    fi
 
     systemctl daemon-reload
 
-    if confirm "Also remove Wings config (${WINGS_DIR})? (y/N):" "N"; then
+    # ── Restart web server ──
+    systemctl restart nginx 2>/dev/null || systemctl restart apache2 2>/dev/null || \
+        systemctl restart httpd 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+
+    if confirm "Also remove Wings config and data (${WINGS_DIR})? (y/N):" "N"; then
         rm -rf "$WINGS_DIR"
+        info "Wings config directory removed."
+    fi
+
+    # ── Clean up Let's Encrypt certs if desired ──
+    if confirm "Remove any Let's Encrypt certificates obtained for Wings? (y/N):" "N"; then
+        local wings_domain=""
+        if [[ -f "${WINGS_DIR}/config.yml" ]]; then
+            wings_domain=$(grep -E "^\s+cert:" "${WINGS_DIR}/config.yml" 2>/dev/null | grep -oP '/etc/letsencrypt/live/\K[^/]+' | head -1)
+        fi
+        if [[ -n "$wings_domain" ]]; then
+            certbot delete --cert-name "$wings_domain" --non-interactive 2>/dev/null \
+                && success "Cert for ${wings_domain} removed" \
+                || warn "Could not remove cert — run: certbot delete --cert-name ${wings_domain}"
+        else
+            info "No Wings domain cert found to remove."
+        fi
     fi
 
     success "Wings uninstalled"
