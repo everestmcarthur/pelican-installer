@@ -261,6 +261,7 @@ install_php() {
         local php_packages=(
             "php${PHP_VERSION}" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-common"
             "php${PHP_VERSION}-cli" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-mysql"
+            "php${PHP_VERSION}-pgsql"
             "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-xml"
             "php${PHP_VERSION}-curl" "php${PHP_VERSION}-zip" "php${PHP_VERSION}-intl"
             "php${PHP_VERSION}-sqlite3"
@@ -279,7 +280,7 @@ install_php() {
         dnf module enable "php:remi-${PHP_VERSION}" -y >> "$LOG_FILE" 2>&1 || true
 
         local php_packages=(
-            php php-fpm php-common php-cli php-gd php-mysqlnd
+            php php-fpm php-common php-cli php-gd php-mysqlnd php-pgsql
             php-mbstring php-bcmath php-xml php-curl php-zip php-intl php-pdo
         )
 
