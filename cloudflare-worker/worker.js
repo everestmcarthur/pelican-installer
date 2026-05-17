@@ -10,36 +10,15 @@ const SCRIPT_URL = 'https://raw.githubusercontent.com/everestmcarthur/pelican-in
 function isCurl(request) {
   const ua = (request.headers.get('User-Agent') || '').toLowerCase();
   const accept = (request.headers.get('Accept') || '');
-  // curl, wget, httpie, fetch without html accept
   return ua.includes('curl') || ua.includes('wget') || ua.includes('httpie') ||
     ua.includes('powershell') || !accept.includes('text/html');
-}
-
-async function handleRequest(request) {
-  const url = new URL(request.url);
-  
-  // Direct script path always returns script
-  if (url.pathname === '/install.sh' || url.pathname === '/script') {
-    return serveScript();
-  }
-
-  // Root: detect curl vs browser
-  if (url.pathname === '/' || url.pathname === '') {
-    if (isCurl(request)) {
-      return serveScript();
-    }
-    return serveLanding();
-  }
-
-  // 404
-  return new Response('Not Found', { status: 404 });
 }
 
 async function serveScript() {
   const resp = await fetch(SCRIPT_URL, {
     cf: { cacheTtl: 300, cacheEverything: true }
   });
-  
+
   if (!resp.ok) {
     return new Response('#!/bin/bash\necho "Error: Could not fetch installer. Try: curl -sSL https://raw.githubusercontent.com/everestmcarthur/pelican-installer/main/install.sh | sudo bash"\nexit 1', {
       status: 502,
@@ -94,7 +73,6 @@ function serveLanding() {
   <div class="container">
     <h1>🐦 <span>Pelican Installer</span></h1>
     <p class="subtitle">The best way to install Pelican Panel &amp; Wings — one command, fully automated.</p>
-
     <div class="card">
       <div class="card-title">Quick Install</div>
       <div class="cmd" onclick="copyCmd(this, 'curl -sSL https://install.jarviscli.dev | sudo bash')">
@@ -102,15 +80,13 @@ function serveLanding() {
         <span class="copy-hint">click to copy</span>
       </div>
     </div>
-
     <div class="card">
       <div class="card-title">Or with options</div>
-      <div class="cmd" onclick="copyCmd(this, \`curl -sSL https://install.jarviscli.dev | sudo bash -s -- install --panel --domain panel.example.com --webserver nginx --database postgres --ssl --email you@example.com --cache-driver redis --session-driver redis --queue-driver redis --admin-email admin@example.com --admin-user admin --admin-pass MyPassword -y\`)">
+      <div class="cmd" onclick="copyCmd(this, 'curl -sSL https://install.jarviscli.dev | sudo bash -s -- install --panel --domain panel.example.com --webserver nginx --database postgres --ssl --email you@example.com --cache-driver redis --session-driver redis --queue-driver redis --admin-email admin@example.com --admin-user admin --admin-pass MyPassword -y')">
         <code>curl -sSL https://install.jarviscli.dev | sudo bash -s -- install \\<br>  --panel --domain panel.example.com --webserver nginx \\<br>  --database postgres --ssl --email you@example.com \\<br>  --cache-driver redis --session-driver redis \\<br>  --queue-driver redis --admin-email admin@example.com \\<br>  --admin-user admin --admin-pass MyPassword -y</code>
         <span class="copy-hint">click to copy</span>
       </div>
     </div>
-
     <div class="card">
       <div class="card-title">Features</div>
       <div class="features">
@@ -126,25 +102,19 @@ function serveLanding() {
         <div class="feature">ARM64 support</div>
       </div>
     </div>
-
     <div class="links">
       <a href="https://github.com/everestmcarthur/pelican-installer">📦 GitHub</a>
       <a href="https://github.com/everestmcarthur/pelican-installer#readme">📖 Docs</a>
       <a href="https://github.com/everestmcarthur/pelican-installer/issues">🐛 Issues</a>
     </div>
-
     <p class="version">Powered by JarvisCLI</p>
   </div>
-
   <script>
     function copyCmd(el, text) {
       navigator.clipboard.writeText(text);
       el.classList.add('copied');
       el.querySelector('.copy-hint').textContent = 'copied!';
-      setTimeout(() => {
-        el.classList.remove('copied');
-        el.querySelector('.copy-hint').textContent = 'click to copy';
-      }, 2000);
+      setTimeout(() => { el.classList.remove('copied'); el.querySelector('.copy-hint').textContent = 'click to copy'; }, 2000);
     }
   </script>
 </body>
@@ -154,6 +124,21 @@ function serveLanding() {
   });
 }
 
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
-});
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/install.sh' || url.pathname === '/script') {
+      return serveScript();
+    }
+
+    if (url.pathname === '/' || url.pathname === '') {
+      if (isCurl(request)) {
+        return serveScript();
+      }
+      return serveLanding();
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+};
